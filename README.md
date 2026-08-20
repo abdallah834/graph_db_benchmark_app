@@ -29,7 +29,7 @@ database platforms on identical data, queries, and resource tiers.
 - Mixed workload: 80/20 read/write ratio, configurable client concurrency (default 10).
 - Full run automated via `scripts/run-all.sh` — single command, no manual steps between platforms.
 
-### Known caveats (be honest here — this is scored)
+### Known caveats
 
 - The "indexed lookup" metric filters on the `label` property; confirm this is indexed identically on every platform before trusting the comparison (see `loadData()` in each driver).
 - The mixed workload's "write" op currently reuses the traversal query as a write-shaped stand-in, since the common `GraphDriver` interface doesn't yet define a dedicated write method — note this explicitly rather than presenting it as a true write benchmark, or extend the interface with a real `writeOp()` before your final run.
