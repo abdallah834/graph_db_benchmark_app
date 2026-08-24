@@ -52,7 +52,11 @@ export class FalkordbDriver implements Partial<GraphDriver> {
     this.client = await FalkorDB.connect({
       username: this.config.username,
       password: this.config.password,
-      socket: { host, port },
+      socket: {
+        host,
+        port,
+        allowPartialTrustChain: true,
+      },
     });
     this.graph = this.client.selectGraph(GRAPH_NAME);
     this.logger.log(`Connected to FalkorDB at ${host}:${port}`);
@@ -94,13 +98,13 @@ export class FalkordbDriver implements Partial<GraphDriver> {
 
     for (let i = 0; i < nodes.length; i += INGEST_BATCH_SIZE) {
       const batch = nodes.slice(i, i + INGEST_BATCH_SIZE).map((n) => ({
-        id: n.id,
+        entityId: n.id,
         label: n.label,
         ...n.properties,
       }));
       await this.graph.query(
         `UNWIND $batch AS row
-         CREATE (n:Entity {id: row.id, label: row.label})
+         CREATE (n:Entity {entityId: row.entityId, label: row.label})
          SET n += row`,
         { params: { batch } },
       );
@@ -108,8 +112,12 @@ export class FalkordbDriver implements Partial<GraphDriver> {
 
     // Index both lookup properties - see cognodb.driver.ts for why the
     // `label` index specifically matters for a fair "indexed lookup" metric.
-    await this.graph.query('CREATE INDEX FOR (n:Entity) ON (n.id)');
-    await this.graph.query('CREATE INDEX FOR (n:Entity) ON (n.label)');
+    await this.createIndexIfNotExists(
+      'CREATE INDEX FOR (n:Entity) ON (n.entityId)',
+    );
+    await this.createIndexIfNotExists(
+      'CREATE INDEX FOR (n:Entity) ON (n.label)',
+    );
 
     for (let i = 0; i < edges.length; i += INGEST_BATCH_SIZE) {
       const batch = edges.slice(i, i + INGEST_BATCH_SIZE).map((e) => ({
@@ -120,7 +128,7 @@ export class FalkordbDriver implements Partial<GraphDriver> {
       }));
       await this.graph.query(
         `UNWIND $batch AS row
-         MATCH (a:Entity {id: row.from}), (b:Entity {id: row.to})
+         MATCH (a:Entity {entityId: row.from}), (b:Entity {entityId: row.to})
          CREATE (a)-[r:RELATES {type: row.type}]->(b)`,
         { params: { batch } },
       );
@@ -137,14 +145,28 @@ export class FalkordbDriver implements Partial<GraphDriver> {
       relationshipsPerSecond: edges.length / seconds,
     };
   }
-
+  private async createIndexIfNotExists(query: string): Promise<void> {
+    try {
+      await this.graph.query(query);
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message.toLowerCase() : String(error);
+      const alreadyExists =
+        message.includes('already indexed') ||
+        message.includes('already exists');
+      if (!alreadyExists) {
+        throw error;
+      }
+      this.logger.log(`Index already exists, skipping: ${query}`);
+    }
+  }
   async traverse(
     startNodeId: string,
     hops: 1 | 2 | 3,
   ): Promise<TimedResult<number>> {
     return this.timed(async () => {
       const result = await this.graph.query(
-        `MATCH (start:Entity {id: $startNodeId})-[*${hops}]-(reached)
+        `MATCH (start:Entity {id: $startNodeId})-[*${hops}]->(reached)
          RETURN count(DISTINCT reached) AS reachedCount`,
         { params: { startNodeId } },
       );
@@ -157,7 +179,7 @@ export class FalkordbDriver implements Partial<GraphDriver> {
   async pointLookup(id: string): Promise<TimedResult<unknown>> {
     return this.timed(async () => {
       const result = await this.graph.query(
-        'MATCH (n:Entity {id: $id}) RETURN n',
+        'MATCH (n:Entity {entityId: $id}) RETURN n',
         {
           params: { id },
         },
@@ -172,8 +194,9 @@ export class FalkordbDriver implements Partial<GraphDriver> {
   ): Promise<TimedResult<unknown>> {
     return this.timed(async () => {
       // property name comes from the workload layer's whitelist, not raw user input.
+      const storageProperty = property === 'id' ? 'entityId' : property;
       const result = await this.graph.query(
-        `MATCH (n:Entity) WHERE n.${property} = $value RETURN n LIMIT 1`,
+        `MATCH (n:Entity) WHERE n.${storageProperty} = $value RETURN n LIMIT 1`,
         { params: { value } },
       );
       return (result.data?.[0] as { n: any })?.n as unknown;

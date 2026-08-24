@@ -101,10 +101,14 @@ export class CognodbDriver implements Partial<GraphDriver> {
     hops: 1 | 2 | 3,
   ): Promise<TimedResult<number>> {
     return this.timed((session) =>
-      session.run(
-        `MATCH (start:Entity {id: $startNodeId})-[*${hops}]-(reached)
+      session.executeRead(
+        (tx) =>
+          tx.run(
+            `MATCH (start:Entity {id: $startNodeId})-[*${hops}]->(reached)
          RETURN count(DISTINCT reached) AS reachedCount`,
-        { startNodeId },
+            { startNodeId },
+          ),
+        { timeout: 15000 },
       ),
     ).then(({ result, durationMs }) => ({
       result: Number(result.records[0]?.get('reachedCount') ?? 0),
@@ -114,7 +118,9 @@ export class CognodbDriver implements Partial<GraphDriver> {
 
   async pointLookup(id: string): Promise<TimedResult<unknown>> {
     return this.timed((session) =>
-      session.run('MATCH (n:Entity {id: $id}) RETURN n', { id }),
+      session.executeRead((tx) =>
+        tx.run('MATCH (n:Entity {id: $id}) RETURN n', { id }),
+      ),
     ).then(({ result, durationMs }) => ({
       result: (result.records[0]?.get('n') as Node)?.properties,
       durationMs,
@@ -128,11 +134,11 @@ export class CognodbDriver implements Partial<GraphDriver> {
     // Property name is validated/whitelisted by the caller (workload layer),
     // never taken raw from user input, before being interpolated here.
     return this.timed((session) =>
-      session.run(
-        `MATCH (n:Entity) WHERE n.${property} = $value RETURN n LIMIT 1`,
-        {
-          value,
-        },
+      session.executeRead((tx) =>
+        tx.run(
+          `MATCH (n:Entity) WHERE n.${property} = $value RETURN n LIMIT 1`,
+          { value },
+        ),
       ),
     ).then(({ result, durationMs }) => ({
       result: (result.records[0]?.get('n') as Node)?.properties,
@@ -142,10 +148,12 @@ export class CognodbDriver implements Partial<GraphDriver> {
 
   async aggregate(groupByLabel: string): Promise<TimedResult<unknown>> {
     return this.timed((session) =>
-      session.run(
-        `MATCH (n:Entity {label: $groupByLabel})
-         RETURN n.label AS label, count(n) AS total`,
-        { groupByLabel },
+      session.executeRead((tx) =>
+        tx.run(
+          `MATCH (n:Entity {label: $groupByLabel})
+           RETURN n.label AS label, count(n) AS total`,
+          { groupByLabel },
+        ),
       ),
     ).then(({ result, durationMs }) => ({
       result: result.records.map((r) => ({

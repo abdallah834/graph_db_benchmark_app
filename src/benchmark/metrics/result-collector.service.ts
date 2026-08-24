@@ -37,10 +37,42 @@ export class ResultCollectorService {
       byPlatform.set(record.platform, existing);
     }
 
-    for (const [platform, records] of byPlatform) {
+    for (const [platform, newRecords] of byPlatform) {
       const filePath = path.join(this.outDir, `${platform}.json`);
-      await fs.writeFile(filePath, JSON.stringify(records, null, 2));
-      this.logger.log(`Wrote ${filePath}`);
+      const merged = await this.mergeWithExisting(filePath, newRecords);
+      await fs.writeFile(filePath, JSON.stringify(merged, null, 2));
+      this.logger.log(
+        `Wrote ${filePath} (${merged.length} workload record(s) total for ${platform})`,
+      );
     }
+  }
+
+  /** Each CLI invocation of `run` only knows about the one workload it just
+   * ran - its in-memory `records` array starts empty every time the process
+   * starts. Without this merge step, writing `results/<platform>.json`
+   * would overwrite whatever a *previous* `run --workload X` invocation
+   * already wrote, silently losing every earlier workload's results.
+   *
+   * Merge keeps at most one record per (platform, workload) pair - a
+   * re-run of the same workload replaces its old result rather than
+   * duplicating it, everything else on disk is preserved. */
+  private async mergeWithExisting(
+    filePath: string,
+    newRecords: WorkloadRecord[],
+  ): Promise<WorkloadRecord[]> {
+    let existingRecords: WorkloadRecord[] = [];
+    try {
+      const raw = await fs.readFile(filePath, 'utf-8');
+      existingRecords = JSON.parse(raw) as WorkloadRecord[];
+    } catch {
+      // no existing file yet - nothing to merge with
+    }
+
+    const newWorkloadNames = new Set(newRecords.map((r) => r.workload));
+    const keptExisting = existingRecords.filter(
+      (r) => !newWorkloadNames.has(r.workload),
+    );
+
+    return [...keptExisting, ...newRecords];
   }
 }

@@ -42,6 +42,7 @@ export class Neo4jAuraDriver implements Partial<GraphDriver> {
     this.driver = neo4j.driver(
       this.config.uri,
       neo4j.auth.basic(this.config.user, this.config.password),
+      { maxConnectionLifetime: 5 * 60 * 1000 },
     );
     await this.driver.verifyConnectivity();
     this.logger.log(`Connected to Neo4j AuraDB at ${this.config.uri}`);
@@ -112,10 +113,14 @@ export class Neo4jAuraDriver implements Partial<GraphDriver> {
     hops: 1 | 2 | 3,
   ): Promise<TimedResult<number>> {
     return this.timed((session) =>
-      session.run(
-        `MATCH (start:Entity {id: $startNodeId})-[*${hops}]-(reached)
-         RETURN count(DISTINCT reached) AS reachedCount`,
-        { startNodeId },
+      session.executeRead(
+        (tx) =>
+          tx.run(
+            `MATCH (start:Entity {id: $startNodeId})-[*${hops}]->(reached)
+             RETURN count(DISTINCT reached) AS reachedCount`,
+            { startNodeId },
+          ),
+        { timeout: 15000 },
       ),
     ).then(({ result, durationMs }) => ({
       result: Number(result.records[0]?.get('reachedCount') ?? 0),
@@ -125,7 +130,9 @@ export class Neo4jAuraDriver implements Partial<GraphDriver> {
 
   async pointLookup(id: string): Promise<TimedResult<unknown>> {
     return this.timed((session) =>
-      session.run('MATCH (n:Entity {id: $id}) RETURN n', { id }),
+      session.executeRead((tx) =>
+        tx.run('MATCH (n:Entity {id: $id}) RETURN n', { id }),
+      ),
     ).then(({ result, durationMs }) => ({
       result: (result.records[0]?.get('n') as Node)?.properties,
       durationMs,
@@ -137,11 +144,11 @@ export class Neo4jAuraDriver implements Partial<GraphDriver> {
     value: string | number,
   ): Promise<TimedResult<unknown>> {
     return this.timed((session) =>
-      session.run(
-        `MATCH (n:Entity) WHERE n.${property} = $value RETURN n LIMIT 1`,
-        {
-          value,
-        },
+      session.executeRead((tx) =>
+        tx.run(
+          `MATCH (n:Entity) WHERE n.${property} = $value RETURN n LIMIT 1`,
+          { value },
+        ),
       ),
     ).then(({ result, durationMs }) => ({
       result: (result.records[0]?.get('n') as Node)?.properties,
@@ -151,10 +158,12 @@ export class Neo4jAuraDriver implements Partial<GraphDriver> {
 
   async aggregate(groupByLabel: string): Promise<TimedResult<unknown>> {
     return this.timed((session) =>
-      session.run(
-        `MATCH (n:Entity {label: $groupByLabel})
-         RETURN n.label AS label, count(n) AS total`,
-        { groupByLabel },
+      session.executeRead((tx) =>
+        tx.run(
+          `MATCH (n:Entity {label: $groupByLabel})
+           RETURN n.label AS label, count(n) AS total`,
+          { groupByLabel },
+        ),
       ),
     ).then(({ result, durationMs }) => ({
       result: result.records.map((r) => ({

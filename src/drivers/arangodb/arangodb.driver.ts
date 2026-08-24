@@ -56,7 +56,11 @@ export class ArangodbDriver implements Partial<GraphDriver> {
       // known-untrusted-by-default self-signed cert on a trusted managed
       // endpoint - worth noting as a deliberate call in README, not a
       // security shortcut.
-      agentOptions: { rejectUnauthorized: true },
+      agentOptions: {
+        rejectUnauthorized: false,
+        requestCert: false,
+        allowPartialTrustChain: true,
+      },
     });
     await this.db.version();
     this.logger.log(`Connected to ArangoDB at ${this.config.url}`);
@@ -136,7 +140,7 @@ export class ArangodbDriver implements Partial<GraphDriver> {
     return await this.timed(async () => {
       const cursor = await this.db.query({
         query: `
-          FOR v IN 1..@hops ANY @startVertex GRAPH @graphName
+          FOR v IN 1..@hops OUTBOUND @startVertex GRAPH @graphName
             OPTIONS { bfs: true, uniqueVertices: "global" }
             COLLECT WITH COUNT INTO reachedCount
             RETURN reachedCount
